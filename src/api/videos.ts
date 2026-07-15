@@ -44,8 +44,6 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     throw new BadRequestError("Invalid video file type")
   }
 
-  const key = `${videoId}.mp4`
-
   const filePath = path.join(
     "/tmp",
     `${randomBytes(16).toString("hex")}.mp4`
@@ -55,6 +53,10 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     const arrayBuffer = await videoFile.arrayBuffer()
 
     await Bun.write(filePath, arrayBuffer)
+
+    const aspectRatio = await getVideoAspectRatio(filePath)
+
+    const key = `${aspectRatio}/${videoId}.mp4`
 
     await cfg.s3Client
       .file(key)
@@ -75,4 +77,51 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   } finally {
     await Bun.file(filePath).delete()
   }
+}
+
+export async function getVideoAspectRatio(filePath: string) {
+  const proc = Bun.spawn({
+    cmd: [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height",
+      "-of",
+      "json",
+      filePath
+    ],
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+
+  const stdoutText = await new Response(proc.stdout).text()
+  const stderrText = await new Response(proc.stderr).text()
+
+  const exitCode = await proc.exited
+
+  if (exitCode !== 0) {
+    throw new Error(stderrText)
+  }
+
+  const data = JSON.parse(stdoutText)
+  const { width, height } = data.streams[0]
+
+  const ratio = width / height
+
+  const landscape = 16 / 9
+  const portrait = 9 / 16
+  const tolerance = 0.01
+
+  if (Math.abs(ratio - landscape) < tolerance) {
+    return "landscape"
+  }
+
+  if (Math.abs(ratio - portrait) < tolerance) {
+    return "portrait"
+  }
+
+  return "other"
 }
