@@ -49,18 +49,22 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     `${randomBytes(16).toString("hex")}.mp4`
   )
 
+  let processedFilePath: string | undefined
+
   try {
     const arrayBuffer = await videoFile.arrayBuffer()
 
     await Bun.write(filePath, arrayBuffer)
 
-    const aspectRatio = await getVideoAspectRatio(filePath)
+    processedFilePath = await processVideoForFastStart(filePath)
+
+    const aspectRatio = await getVideoAspectRatio(processedFilePath)
 
     const key = `${aspectRatio}/${videoId}.mp4`
 
     await cfg.s3Client
       .file(key)
-      .write(Bun.file(filePath), {
+      .write(Bun.file(processedFilePath), {
         type: videoFile.type
       })
 
@@ -76,10 +80,14 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     return respondWithJSON(200, updatedVideo)
   } finally {
     await Bun.file(filePath).delete()
+
+    if (processedFilePath) {
+      await Bun.file(processedFilePath).delete()
+    }
   }
 }
 
-export async function getVideoAspectRatio(filePath: string) {
+export async function getVideoAspectRatio(filePath: string): Promise<string> {
   const proc = Bun.spawn({
     cmd: [
       "ffprobe",
@@ -124,4 +132,33 @@ export async function getVideoAspectRatio(filePath: string) {
   }
 
   return "other"
+}
+
+export async function processVideoForFastStart(inputFilePath: string): Promise<string> {
+  const outputFilePath = `${inputFilePath}.processed`
+
+  const proc = Bun.spawn({
+    cmd: [
+      "ffmpeg",
+      "-i",
+      inputFilePath,
+      "-movflags",
+      "faststart",
+      "-map_metadata",
+      "0",
+      "-codec",
+      "copy",
+      "-f",
+      "mp4",
+      outputFilePath
+    ]
+  })
+
+  const exitCode = await proc.exited
+
+  if (exitCode !== 0) {
+    throw new Error("Failed to process video for fast start")
+  }
+
+  return outputFilePath
 }
