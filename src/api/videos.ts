@@ -7,7 +7,6 @@ import { getBearerToken, validateJWT } from "../auth";
 import { getVideo, updateVideo, type Video } from "../db/videos";
 import { randomBytes } from "crypto"
 import path from "path";
-import { generatePresignedURL } from "../s3";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const MAX_UPLOAD_SIZE = 1 << 30
@@ -69,18 +68,16 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
         type: videoFile.type
       })
 
-    // const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`
+    const videoURL = `${cfg.s3CfDistribution}/${key}`
 
     const updatedVideo = {
       ...metadata,
-      videoURL: key
+      videoURL
     }
 
     await updateVideo(cfg.db, updatedVideo)
 
-    const signedVideo = dbVideoToSignedVideo(cfg, updatedVideo)
-
-    return respondWithJSON(200, signedVideo)
+    return respondWithJSON(200, updatedVideo)
   } finally {
     await Bun.file(filePath).delete()
 
@@ -164,17 +161,4 @@ export async function processVideoForFastStart(inputFilePath: string): Promise<s
   }
 
   return outputFilePath
-}
-
-export function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
-  if (!video.videoURL) {
-    throw new Error("Video has no S3 key")
-  }
-
-  const presignedURL = generatePresignedURL(cfg, video.videoURL, 3600)
-
-  return {
-    ...video,
-    videoURL: presignedURL
-  }
 }
